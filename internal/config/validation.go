@@ -9,19 +9,58 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
+// Package-level validator used by ValidateBaseConfig / ValidateDevEnvConfig.
 var validate *validator.Validate
 
+// sshKeyRE matches common OpenSSH public key formats:
+//
+//   - ssh-ed25519
+//   - ssh-rsa
+//   - ecdsa-sha2-nistp256 / nistp384 / nistp521
+//   - sk-ecdsa-sha2-nistp256@openssh.com (FIDO)
+//
+// Pattern: <type><space><base64>[optional comment]
+// Base64 is matched loosely with 0–2 '=' padding to accommodate real-world keys.
+var sshKeyRegex = regexp.MustCompile(
+	`^(?:(?:ssh-(?:ed25519|rsa))|(?:ecdsa-sha2-nistp(?:256|384|521))|(?:sk-ecdsa-sha2-nistp256@openssh\.com)) [A-Za-z0-9+/]+={0,2}(?: .+)?$`,
+)
+
+// numberRe matches a non-negative decimal number (integer or fractional).
+// Examples: "0", "2", "2.5", "  3  ".
+var numberRe = regexp.MustCompile(`^\s*[0-9]+(?:\.[0-9]+)?\s*$`)
+
+// cpuMillicoresRe matches a non-negative decimal number with an 'm' suffix (millicores).
+// Examples: "500m", "0m", "  12.5m  ".
+var cpuMillicoresRe = regexp.MustCompile(`^\s*[0-9]+(?:\.[0-9]+)?m\s*$`)
+
+// memoryRe matches Kubernetes-like memory quantities as strings, case-insensitive.
+// Accepts:
+//   - Binary: Ki, Mi, Gi, Ti, Pi, Ei
+//   - Decimal SI: k, M, G, T, P, E
+//   - Optional unit (bare numbers allowed — your parser treats these as Gi later)
+//
+// Examples: "512Mi", "16Gi", "500M", "1G", "1536", " 2.5Gi ".
+var memoryRe = regexp.MustCompile(`(?i)^\s*[0-9]+(?:\.[0-9]+)?(?:ki|mi|gi|ti|pi|ei|k|m|g|t|p|e)?\s*$`)
+
 func init() {
-	// Opt-in to v11+ behavior
+	// Enable "required on structs" semantics and register custom validators.
 	validate = validator.New(validator.WithRequiredStructEnabled())
 
-	// Register custom validators
-	validate.RegisterValidation("ssh_keys", validateSSHKeys)
-	validate.RegisterValidation("k8s_cpu", validateKubernetesCPU)
-	validate.RegisterValidation("k8s_memory", validateKubernetesMemory)
+	if err := validate.RegisterValidation("ssh_keys", validateSSHKeys); err != nil {
+		panic(fmt.Errorf("register validator ssh_keys: %w", err))
+	}
+	if err := validate.RegisterValidation("k8s_cpu", validateKubernetesCPU); err != nil {
+		panic(fmt.Errorf("register validator k8s_cpu: %w", err))
+	}
+	if err := validate.RegisterValidation("k8s_memory", validateKubernetesMemory); err != nil {
+		panic(fmt.Errorf("register validator k8s_memory: %w", err))
+	}
 }
 
-// validateSSHKeys validates SSH public key format
+// validateSSHKeys implements the "ssh_keys" tag.
+// It normalizes the flexible field (nil | string | []string | []any of string) to []string,
+// trims each entry, and validates format via sshKeyRE. It returns true iff all present
+// entries are valid. Presence (≥1) is enforced separately in ValidateDevEnvConfig.
 func validateSSHKeys(fl validator.FieldLevel) bool {
 	sshKeyField := fl.Field().Interface()
 
@@ -30,10 +69,6 @@ func validateSSHKeys(fl validator.FieldLevel) bool {
 	if err != nil {
 		return false
 	}
-
-	// Validate each SSH key format
-	sshKeyRegex := regexp.MustCompile(`^ssh-(rsa|ed25519|ecdsa) [A-Za-z0-9+/]+=*( .+)?$`)
-
 	for _, key := range sshKeys {
 		key = strings.TrimSpace(key)
 		if key == "" || !sshKeyRegex.MatchString(key) {
@@ -43,65 +78,144 @@ func validateSSHKeys(fl validator.FieldLevel) bool {
 	return true
 }
 
+// validateKubernetesCPU implements the "k8s_cpu" tag for *raw* CPU fields.
+// Accepts:
+//   - Strings: "", "unlimited", plain number ("2", "2.5"), or millicores ("500m")
+//   - Numbers (int/uint/float): non-negative
+//
+// Negatives and malformed strings are rejected.
+// NOTE: canonicalization (→ millicores) happens in normalizeCPU during loading.
 func validateKubernetesCPU(fl validator.FieldLevel) bool {
 	cpuField := fl.Field().Interface()
-	switch cpu := cpuField.(type) {
+	switch v := cpuField.(type) {
 	case string:
-		if cpu == "" || cpu == "unlimited" {
-			return true // Valid special values
+		s := strings.TrimSpace(v)
+		if s == "" || strings.EqualFold(s, "unlimited") {
+			return true
 		}
 		// Check if it's a valid number or decimal
-		if _, err := strconv.ParseFloat(cpu, 64); err != nil {
-			// Check for 'm' suffix (millicores)
-			if strings.HasSuffix(cpu, "m") {
-				cpuValue := strings.TrimSuffix(cpu, "m")
-				_, err := strconv.ParseFloat(cpuValue, 64)
-				return err == nil
+		if numberRe.MatchString(s) || cpuMillicoresRe.MatchString(s) {
+			// Strip optional 'm' and parse number to ensure it's a valid float ≥ 0.
+			if strings.HasSuffix(strings.ToLower(s), "m") {
+				s = strings.TrimSpace(strings.TrimSuffix(s, "m"))
 			}
+			f, err := strconv.ParseFloat(s, 64)
+			return err == nil && f >= 0
+		}
+		return false
+
+	case int:
+		return v >= 0
+	case int8:
+		return v >= 0
+	case int16:
+		return v >= 0
+	case int32:
+		return v >= 0
+	case int64:
+		return v >= 0
+
+	case uint, uint8, uint16, uint32, uint64:
+		// Unsigned are non-negative by definition.
+		return true
+
+	case float32:
+		return !float32IsNaNOrInf(v) && v >= 0
+	case float64:
+		return !float64IsNaNOrInf(v) && v >= 0
+
+	default:
+		return false
+	}
+}
+
+// validateKubernetesMemory implements the "k8s_memory" tag for *raw* memory fields.
+// Accepts:
+//   - Strings: "", "unlimited", or a non-negative decimal + optional unit among
+//     Ki/Mi/Gi/Ti/Pi/Ei (binary) or k/M/G/T/P/E (decimal SI), case-insensitive.
+//     Bare numbers are allowed (your parser interprets them as Gi).
+//   - Numbers (int/uint/float): non-negative
+//
+// Negatives and malformed strings are rejected.
+// NOTE: canonicalization (→ MiB) happens in normalizeMemory during loading.
+func validateKubernetesMemory(fl validator.FieldLevel) bool {
+	switch v := fl.Field().Interface().(type) {
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" || strings.EqualFold(s, "unlimited") {
+			return true
+		}
+		if !memoryRe.MatchString(s) {
 			return false
 		}
-		return true
+		// Strip known unit suffix (if any) before parsing the number.
+		ls := strings.ToLower(s)
+		for _, suf := range []string{"ki", "mi", "gi", "ti", "pi", "ei", "k", "m", "g", "t", "p", "e"} {
+			if strings.HasSuffix(ls, suf) {
+				s = s[:len(s)-len(suf)]
+				break
+			}
+		}
+		f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		return err == nil && f >= 0
+
 	case int:
-		return cpu >= 0 // Non-negative integer
+		return v >= 0
+	case int8:
+		return v >= 0
+	case int16:
+		return v >= 0
+	case int32:
+		return v >= 0
+	case int64:
+		return v >= 0
+
+	case uint, uint8, uint16, uint32, uint64:
+		return true
+
+	case float32:
+		return !float32IsNaNOrInf(v) && v >= 0
 	case float64:
-		return cpu >= 0 // Non-negative float
+		return !float64IsNaNOrInf(v) && v >= 0
+
 	default:
-		return false // Invalid type
+		return false
 	}
 }
 
-func validateKubernetesMemory(fl validator.FieldLevel) bool {
-	// get lowercase of string value
-	memory := fl.Field().String()
-	if memory == "" || strings.ToLower(memory) == "unlimited" {
-		return true // Valid special values
-	}
-
-	// Kubernetes memory/straoge format: number + unit (Ki, Mi, Gi, Ti, Pi, Ei)
-	memoryRegex := regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei)?$`)
-	return memoryRegex.MatchString(memory)
-}
-
-// ValidateDevEnvConfig validates a DevEnvConfig using the validator
+// ValidateDevEnvConfig runs tag-based validation and then applies
+// additional semantic checks that are easier to express in code.
 func ValidateDevEnvConfig(config *DevEnvConfig) error {
 	if err := validate.Struct(config); err != nil {
 		return formatValidationError(err)
 	}
 
-	// Additional validation for BaseConfig fields that needs special handling
+	// Require ≥1 SSH public key with valid format.
 	sshKeys, err := config.GetSSHKeys()
 	if err != nil {
-		return fmt.Errorf("failed to get SSH keys: %w", err)
+		return fmt.Errorf("invalid SSH public key(s): %w", err)
 	}
 
 	if len(sshKeys) == 0 {
 		return fmt.Errorf("at least one SSH public key is required")
 	}
 
+	// Canonical resources (already normalized) must be non-negative.
+	if config.Resources.CPU < 0 {
+		return fmt.Errorf("cpu must be >= 0")
+	}
+	if config.Resources.Memory < 0 {
+		return fmt.Errorf("memory must be >= 0")
+	}
+	if config.Resources.GPU < 0 {
+		return fmt.Errorf("gpu must be >= 0")
+	}
+
 	return nil
 }
 
-// ValidateBaseConfig validates a BaseConfig using the validator
+// ValidateBaseConfig validates only the BaseConfig portion; useful for
+// validating global defaults or partial configs before embedding.
 func ValidateBaseConfig(config *BaseConfig) error {
 	if err := validate.Struct(config); err != nil {
 		return formatValidationError(err)
@@ -109,7 +223,7 @@ func ValidateBaseConfig(config *BaseConfig) error {
 	return nil
 }
 
-// formatValidationError converts validator errors to user-friendly messages
+// formatValidationError renders go-playground/validator errors as concise, user-facing text.
 func formatValidationError(err error) error {
 	var errorMessages []string
 
@@ -141,13 +255,29 @@ func formatFieldError(fieldError validator.FieldError) string {
 		return fmt.Sprintf("'%s' must be at most %s characters/value, got '%v'", fieldName, param, value)
 	case "hostname":
 		return fmt.Sprintf("'%s' must be a valid hostname format, got '%v'", fieldName, value)
+	case "url":
+		return fmt.Sprintf("'%s' must be a valid URL, got '%v'", fieldName, value)
+	case "filepath":
+		return fmt.Sprintf("'%s' must be a valid file path, got '%v'", fieldName, value)
+	case "cron":
+		return fmt.Sprintf("'%s' must be a valid cron expression, got '%v'", fieldName, value)
+
 	case "ssh_keys":
 		return fmt.Sprintf("'%s' contains invalid SSH key format", fieldName)
 	case "k8s_cpu":
 		return fmt.Sprintf("'%s' must be a valid Kubernetes CPU format (e.g., '2', '1.5', '500m'), got '%v'", fieldName, value)
 	case "k8s_memory":
 		return fmt.Sprintf("'%s' must be a valid Kubernetes memory format (e.g., '1Gi', '512Mi'), got '%v'", fieldName, value)
+
 	default:
 		return fmt.Sprintf("'%s' failed validation '%s', got '%v'", fieldName, tag, value)
 	}
+}
+
+// Small float guards for validator predicates (avoid NaN/Inf).
+func float32IsNaNOrInf(f float32) bool {
+	return f != f || f > 1e38 || f < -1e38
+}
+func float64IsNaNOrInf(f float64) bool {
+	return f != f || f > 1e308 || f < -1e308
 }

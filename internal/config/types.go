@@ -73,10 +73,12 @@ type PackageConfig struct {
 
 // ResourceConfig represents resource allocation
 type ResourceConfig struct {
-	CPU     any    `yaml:"cpu,omitempty" validate:"omitempty,k8s_cpu"` // Can be string or int
-	Memory  string `yaml:"memory,omitempty" validate:"omitempty,k8s_memory"`
-	Storage string `yaml:"storage,omitempty" validate:"omitempty,k8s_memory"`
-	GPU     int    `yaml:"gpu,omitempty" validate:"omitempty,min=0,max=8"` // Number of GPUs requested
+	CPURaw    any    `yaml:"cpu,omitempty" validate:"omitempty,k8s_cpu"` // Can be string or int
+	MemoryRaw any    `yaml:"memory,omitempty" validate:"omitempty,k8s_memory"`
+	CPU       int64  `yaml:"-"` // canonical
+	Memory    int64  `yaml:"-"` // canonical
+	Storage   string `yaml:"storage,omitempty" validate:"omitempty,k8s_memory"`
+	GPU       int    `yaml:"gpu,omitempty" validate:"omitempty,min=0,max=8"` // Number of GPUs requested
 }
 
 // VolumeMount represents a volume mount configuration
@@ -104,10 +106,10 @@ func NewBaseConfigWithDefaults() BaseConfig {
 		ClearVSCodeCache:   false,
 		PythonBinPath:      "/opt/venv/bin",
 		Resources: ResourceConfig{
-			CPU:     2,      // Default CPU
-			Memory:  "8Gi",  // Default Memory
-			Storage: "20Gi", // Default Storage
-			GPU:     0,      // Default GPU
+			CPU:     2000,     // Default CPU (2 cores)
+			Memory:  8 * 1024, // Default Memory (8Gi -> 8192Mi)
+			Storage: "20Gi",   // Default Storage
+			GPU:     0,        // Default GPU
 		},
 		Packages: PackageConfig{
 			Python: []string{}, // Empty slice - no default packages
@@ -148,31 +150,35 @@ func (c *DevEnvConfig) GetUserID() string {
 // GPU returns the number of GPU resources requested for the developer environment.
 // Returns 0 if no GPU allocation is specified in the configuration.
 func (c *DevEnvConfig) GPU() int {
+	if c.Resources.GPU < 0 {
+		return 0
+	}
 	return c.Resources.GPU
 }
 
-// CPU returns the CPU resource allocation as a string suitable for Kubernetes manifests.
-// It handles flexible input types from YAML (string, int, float64) and converts them
-// to a consistent string format.
+// CPU returns the canonical CPU quantity formatted for Kubernetes (e.g., "2500m").
+// Assumes Resources.CPU has already been normalized to millicores.
+// Returns "0" if CPU <= 0 so callers can omit the field or treat as no request.
 func (c *DevEnvConfig) CPU() string {
-	if c.Resources.CPU == nil {
-		return "0" // This shouldn't happen with proper config loading
-	}
-	switch v := c.Resources.CPU.(type) {
-	case string:
-		return v
-	case int:
-		return fmt.Sprintf("%d", v)
-	case float64:
-		return fmt.Sprintf("%.0f", v)
-	default:
+	if c.Resources.CPU <= 0 {
 		return "0"
 	}
+	return fmt.Sprintf("%dm", c.Resources.CPU)
 }
 
-// Memory returns the memory resource allocation as a string suitable for Kubernetes manifests.
+// Memory returns the canonical memory quantity formatted for Kubernetes.
+// Assumes Resources.Memory has been normalized to Mi (mebibytes).
+// Returns "" if Memory <= 0 so callers can omit the field.
+// Uses "Gi" when an exact Gi multiple, otherwise "Mi".
 func (c *DevEnvConfig) Memory() string {
-	return c.Resources.Memory
+	mi := c.Resources.Memory
+	if mi <= 0 {
+		return ""
+	}
+	if mi%1024 == 0 {
+		return fmt.Sprintf("%dGi", mi/1024)
+	}
+	return fmt.Sprintf("%dMi", mi)
 }
 
 // CPURequest returns the CPU resource request as a string suitable for Kubernetes manifests.
@@ -200,7 +206,12 @@ func (c *DevEnvConfig) NodePort() int {
 // Returns the slice of VolumeMount configurations for binding local directories
 // into the developer environment container.
 func (c *DevEnvConfig) VolumeMounts() []VolumeMount {
-	return c.Volumes
+	if c.Volumes == nil {
+		return nil
+	}
+	out := make([]VolumeMount, len(c.Volumes))
+	copy(out, c.Volumes) // copies the slice AND each struct element by value
+	return out
 }
 
 // GetSSHKeysSlice returns SSH keys as a string slice for use in Go templates.
@@ -209,10 +220,12 @@ func (c *DevEnvConfig) VolumeMounts() []VolumeMount {
 // is not possible.
 func (c *DevEnvConfig) GetSSHKeysSlice() []string {
 	keys, err := c.GetSSHKeys()
-	if err != nil {
-		return []string{} // Return empty slice on error
+	if err != nil || len(keys) == 0 {
+		return []string{}
 	}
-	return keys
+	cp := make([]string, len(keys))
+	copy(cp, keys)
+	return cp
 }
 
 // GetSSHKeysString returns all SSH keys as a single newline-separated string

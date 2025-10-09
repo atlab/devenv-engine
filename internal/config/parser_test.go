@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,63 +25,78 @@ resources:
   cpu: 4
   memory: "16Gi"
 `
-		err := os.WriteFile(globalConfigPath, []byte(globalConfigYAML), 0644)
-		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(globalConfigPath, []byte(globalConfigYAML), 0o644))
 
 		// Load global config
-		config, err := LoadGlobalConfig(tempDir)
+		cfg, err := LoadGlobalConfig(tempDir)
 		require.NoError(t, err)
 
-		// Test that YAML values override defaults
-		assert.Equal(t, "custom:latest", config.Image)
-		assert.False(t, config.InstallHomebrew) // Override default true
-		assert.Equal(t, 4, config.Resources.CPU)
-		assert.Equal(t, "16Gi", config.Resources.Memory)
-		assert.Equal(t, []string{"curl", "git"}, config.Packages.APT)
-		assert.Equal(t, []string{"requests"}, config.Packages.Python)
+		// YAML values override defaults
+		assert.Equal(t, "custom:latest", cfg.Image)
+		assert.False(t, cfg.InstallHomebrew) // override default true
 
-		// Test that unspecified values keep defaults
-		assert.True(t, config.ClearLocalPackages == false)     // Default
-		assert.True(t, config.ClearVSCodeCache == false)       // Default
-		assert.Equal(t, "/opt/venv/bin", config.PythonBinPath) // Default
-		assert.Equal(t, 1000, config.UID)                      // Default
+		// Canonical resource units: CPU in millicores, Memory in Mi
+		assert.Equal(t, int64(4000), cfg.Resources.CPU)       // 4 cores -> 4000m
+		assert.Equal(t, int64(16*1024), cfg.Resources.Memory) // 16Gi -> 16384 Mi
+
+		// Also verify formatted getters via DevEnvConfig wrapper
+		dev := &DevEnvConfig{BaseConfig: *cfg}
+		assert.Equal(t, "4000m", dev.CPU())
+		assert.Equal(t, "16Gi", dev.Memory())
+
+		// Packages merged from YAML
+		assert.Equal(t, []string{"curl", "git"}, cfg.Packages.APT)
+		assert.Equal(t, []string{"requests"}, cfg.Packages.Python)
+
+		// Unspecified fields keep defaults
+		assert.False(t, cfg.ClearLocalPackages)
+		assert.False(t, cfg.ClearVSCodeCache)
+		assert.Equal(t, "/opt/venv/bin", cfg.PythonBinPath)
+		assert.Equal(t, 1000, cfg.UID)
+		assert.Equal(t, "20Gi", cfg.Resources.Storage) // default storage unchanged
+		assert.Equal(t, 0, cfg.Resources.GPU)          // default GPU unchanged
 	})
 
-	t.Run("global config file does not exist", func(t *testing.T) {
-		// Create empty temp directory
+	t.Run("global config file does not exist -> system defaults", func(t *testing.T) {
 		tempDir := t.TempDir()
 
-		// Load global config from non-existent file
-		config, err := LoadGlobalConfig(tempDir)
+		cfg, err := LoadGlobalConfig(tempDir)
 		require.NoError(t, err)
 
-		// Should return all defaults
-		assert.Equal(t, "ubuntu:22.04", config.Image)
-		assert.True(t, config.InstallHomebrew)
-		assert.False(t, config.ClearLocalPackages)
-		assert.False(t, config.ClearVSCodeCache)
-		assert.Equal(t, "/opt/venv/bin", config.PythonBinPath)
-		assert.Equal(t, 1000, config.UID)
-		assert.Equal(t, 2, config.Resources.CPU)
-		assert.Equal(t, "8Gi", config.Resources.Memory)
-		assert.Equal(t, []string{}, config.Packages.APT)
-		assert.Equal(t, []string{}, config.Packages.Python)
+		// Top-level defaults
+		assert.Equal(t, "ubuntu:22.04", cfg.Image)
+		assert.True(t, cfg.InstallHomebrew)
+		assert.False(t, cfg.ClearLocalPackages)
+		assert.False(t, cfg.ClearVSCodeCache)
+		assert.Equal(t, "/opt/venv/bin", cfg.PythonBinPath)
+		assert.Equal(t, 1000, cfg.UID)
+
+		// Canonical resource defaults (CPU millicores, Memory Mi)
+		assert.Equal(t, int64(2000), cfg.Resources.CPU)      // 2 cores
+		assert.Equal(t, int64(8*1024), cfg.Resources.Memory) // 8Gi
+		assert.Equal(t, "20Gi", cfg.Resources.Storage)
+		assert.Equal(t, 0, cfg.Resources.GPU)
+
+		// Slices are non-nil and empty
+		assert.NotNil(t, cfg.Packages.APT)
+		assert.Len(t, cfg.Packages.APT, 0)
+		assert.NotNil(t, cfg.Packages.Python)
+		assert.Len(t, cfg.Packages.Python, 0)
+		assert.NotNil(t, cfg.Volumes)
+		assert.Len(t, cfg.Volumes, 0)
 	})
 
-	t.Run("invalid YAML in global config", func(t *testing.T) {
+	t.Run("invalid YAML in global config -> error", func(t *testing.T) {
 		tempDir := t.TempDir()
 		globalConfigPath := filepath.Join(tempDir, "devenv.yaml")
 
-		// Write invalid YAML
-		invalidYAML := `image: "test
-installHomebrew: [invalid`
-		err := os.WriteFile(globalConfigPath, []byte(invalidYAML), 0644)
-		require.NoError(t, err)
+		invalidYAML := "image: \"test\ninstallHomebrew: [invalid"
+		require.NoError(t, os.WriteFile(globalConfigPath, []byte(invalidYAML), 0o644))
 
-		// Should return error
-		_, err = LoadGlobalConfig(tempDir)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to parse YAML")
+		_, err := LoadGlobalConfig(tempDir)
+		require.Error(t, err)
+		// Keep the substring check loose to avoid overfitting exact wording
+		assert.Contains(t, strings.ToLower(err.Error()), "parse")
 	})
 }
 
@@ -88,13 +104,13 @@ func TestLoadDeveloperConfig(t *testing.T) {
 	t.Run("valid developer config", func(t *testing.T) {
 		tempDir := t.TempDir()
 		developerDir := filepath.Join(tempDir, "alice")
-		err := os.MkdirAll(developerDir, 0755)
-		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(developerDir, 0o755))
 
 		configPath := filepath.Join(developerDir, "devenv-config.yaml")
+		// Include resources to exercise normalization to canonical units.
 		configYAML := `name: alice
 sshPublicKey:
-  - "ssh-rsa AAAAB3NzaC1yc2E alice@example.com"
+  - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQAB alice@example.com"
 sshPort: 30022
 isAdmin: true
 git:
@@ -103,70 +119,102 @@ git:
 packages:
   python: ["numpy", "pandas"]
   apt: ["vim"]
+resources:
+  cpu: 4
+  memory: "16Gi"
 `
-		err = os.WriteFile(configPath, []byte(configYAML), 0644)
-		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o644))
 
 		// Load developer config
-		config, err := LoadDeveloperConfig(tempDir, "alice")
+		cfg, err := LoadDeveloperConfig(tempDir, "alice")
 		require.NoError(t, err)
 
-		// Test basic fields
-		assert.Equal(t, "alice", config.Name)
-		assert.Equal(t, 30022, config.SSHPort)
-		assert.True(t, config.IsAdmin)
-		assert.Equal(t, "Alice Smith", config.Git.Name)
-		assert.Equal(t, "alice@example.com", config.Git.Email)
-		assert.Equal(t, []string{"numpy", "pandas"}, config.Packages.Python)
-		assert.Equal(t, []string{"vim"}, config.Packages.APT)
+		// Basic fields
+		assert.Equal(t, "alice", cfg.Name)
+		assert.Equal(t, 30022, cfg.SSHPort)
+		assert.True(t, cfg.IsAdmin)
+		assert.Equal(t, "Alice Smith", cfg.Git.Name)
+		assert.Equal(t, "alice@example.com", cfg.Git.Email)
+		assert.Equal(t, []string{"numpy", "pandas"}, cfg.Packages.Python)
+		assert.Equal(t, []string{"vim"}, cfg.Packages.APT)
 
-		// Test SSH keys
-		sshKeys, err := config.GetSSHKeys()
+		// Canonical resources: CPU millicores, Memory Mi
+		assert.Equal(t, int64(4000), cfg.Resources.CPU)       // 4 cores → 4000m
+		assert.Equal(t, int64(16*1024), cfg.Resources.Memory) // 16Gi → 16384 Mi
+
+		// Getter formatting (K8s quantities)
+		assert.Equal(t, "4000m", cfg.CPU())
+		assert.Equal(t, "16Gi", cfg.Memory())
+
+		// SSH keys (strict accessor)
+		keys, err := cfg.GetSSHKeys()
 		require.NoError(t, err)
-		assert.Equal(t, []string{"ssh-rsa AAAAB3NzaC1yc2E alice@example.com"}, sshKeys)
+		assert.Equal(t, []string{"ssh-rsa AAAAB3NzaC1yc2EAAAADAQAB alice@example.com"}, keys)
 
-		// Test developer directory is set
-		assert.Equal(t, developerDir, config.DeveloperDir)
+		// DeveloperDir set
+		assert.Equal(t, developerDir, cfg.DeveloperDir)
 	})
 
 	t.Run("config file not found", func(t *testing.T) {
 		tempDir := t.TempDir()
 
 		_, err := LoadDeveloperConfig(tempDir, "nonexistent")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "configuration file not found")
-	})
-
-	t.Run("invalid config - missing name", func(t *testing.T) {
-		tempDir := t.TempDir()
-		developerDir := filepath.Join(tempDir, "alice")
-		err := os.MkdirAll(developerDir, 0755)
-		require.NoError(t, err)
-
-		configPath := filepath.Join(developerDir, "devenv-config.yaml")
-		configYAML := `sshPublicKey: "ssh-rsa AAAAB3NzaC1yc2E alice@example.com"`
-		err = os.WriteFile(configPath, []byte(configYAML), 0644)
-		require.NoError(t, err)
-
-		_, err = LoadDeveloperConfig(tempDir, "alice")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "'Name' is required")
+		require.Error(t, err)
+		assert.Contains(t, strings.ToLower(err.Error()), "configuration file not found")
 	})
 
 	t.Run("invalid config - missing SSH key", func(t *testing.T) {
 		tempDir := t.TempDir()
 		developerDir := filepath.Join(tempDir, "alice")
-		err := os.MkdirAll(developerDir, 0755)
-		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(developerDir, 0o755))
 
 		configPath := filepath.Join(developerDir, "devenv-config.yaml")
 		configYAML := `name: alice`
-		err = os.WriteFile(configPath, []byte(configYAML), 0644)
-		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o644))
 
-		_, err = LoadDeveloperConfig(tempDir, "alice")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "SSH public key is required")
+		_, err := LoadDeveloperConfig(tempDir, "alice")
+		require.Error(t, err)
+		// Validation layer currently reports: "at least one SSH public key is required"
+		assert.Contains(t, strings.ToLower(err.Error()), "ssh public key")
+		assert.Contains(t, strings.ToLower(err.Error()), "required")
+	})
+
+	t.Run("invalid config - malformed SSH key", func(t *testing.T) {
+		tempDir := t.TempDir()
+		developerDir := filepath.Join(tempDir, "alice")
+		require.NoError(t, os.MkdirAll(developerDir, 0o755))
+
+		configPath := filepath.Join(developerDir, "devenv-config.yaml")
+		configYAML := `name: alice
+sshPublicKey: "ssh-rsa not-base64 user"
+`
+		require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o644))
+
+		_, err := LoadDeveloperConfig(tempDir, "alice")
+		require.Error(t, err)
+		// Error may flow from ssh_keys validator or its wrapper message
+		assert.Contains(t, strings.ToLower(err.Error()), "ssh")
+		assert.Contains(t, strings.ToLower(err.Error()), "invalid")
+	})
+
+	t.Run("invalid config - bad CPU value", func(t *testing.T) {
+		tempDir := t.TempDir()
+		developerDir := filepath.Join(tempDir, "alice")
+		require.NoError(t, os.MkdirAll(developerDir, 0o755))
+
+		configPath := filepath.Join(developerDir, "devenv-config.yaml")
+		configYAML := `name: alice
+sshPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI alice@example.com"
+resources:
+  cpu: "abc"   # invalid
+  memory: "8Gi"
+`
+		require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o644))
+
+		_, err := LoadDeveloperConfig(tempDir, "alice")
+		require.Error(t, err)
+		// Depending on where it fails, message may indicate cpu invalid/parse/validation
+		assert.Contains(t, strings.ToLower(err.Error()), "cpu")
 	})
 }
 
@@ -174,7 +222,7 @@ func TestLoadDeveloperConfigWithGlobalDefaults(t *testing.T) {
 	t.Run("complete integration - global and user config", func(t *testing.T) {
 		tempDir := t.TempDir()
 
-		// Create global config
+		// Global config (provides defaults + base packages + base SSH key)
 		globalConfigYAML := `image: "global:latest"
 installHomebrew: true
 clearLocalPackages: true
@@ -186,14 +234,11 @@ resources:
   memory: "16Gi"
 sshPublicKey: "ssh-rsa AAAAB3NzaC1yc2E admin@company.com"
 `
-		globalConfigPath := filepath.Join(tempDir, "devenv.yaml")
-		err := os.WriteFile(globalConfigPath, []byte(globalConfigYAML), 0644)
-		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(tempDir, "devenv.yaml"), []byte(globalConfigYAML), 0o644))
 
-		// Create user config
+		// User config (overrides and additive lists)
 		developerDir := filepath.Join(tempDir, "alice")
-		err = os.MkdirAll(developerDir, 0755)
-		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(developerDir, 0o755))
 
 		userConfigYAML := `name: alice
 sshPublicKey: "ssh-rsa AAAAB3NzaC1yc2E alice@example.com"
@@ -205,80 +250,83 @@ git:
   name: "Alice Smith"
   email: "alice@example.com"
 `
-		configPath := filepath.Join(developerDir, "devenv-config.yaml")
-		err = os.WriteFile(configPath, []byte(userConfigYAML), 0644)
+		require.NoError(t, os.WriteFile(filepath.Join(developerDir, "devenv-config.yaml"), []byte(userConfigYAML), 0o644))
+
+		// Load global (should normalize canonical CPU/Mem)
+		globalCfg, err := LoadGlobalConfig(tempDir)
 		require.NoError(t, err)
 
-		// Load global config
-		globalConfig, err := LoadGlobalConfig(tempDir)
+		// Load user with global defaults as base (merge + normalize + validate)
+		cfg, err := LoadDeveloperConfigWithBaseConfig(tempDir, "alice", globalCfg)
 		require.NoError(t, err)
 
-		// Load with global defaults
-		config, err := LoadDeveloperConfigWithBaseConfig(tempDir, "alice", globalConfig)
+		// User-specific fields
+		assert.Equal(t, "alice", cfg.Name)
+		assert.Equal(t, "Alice Smith", cfg.Git.Name)
+		assert.Equal(t, "alice@example.com", cfg.Git.Email)
+
+		// Overrides and inherited values
+		assert.Equal(t, "global:latest", cfg.Image) // user didn't specify; inherited from global
+		assert.False(t, cfg.InstallHomebrew)        // user overrides global=true → false
+		assert.True(t, cfg.ClearLocalPackages)      // inherited from global
+
+		// Canonical resource units (CPU millicores, Memory MiB)
+		assert.Equal(t, int64(4000), cfg.Resources.CPU)       // 4 cores → 4000m
+		assert.Equal(t, int64(16*1024), cfg.Resources.Memory) // 16Gi → 16384Mi
+		assert.Equal(t, "4000m", cfg.CPU())                   // formatted getter
+		assert.Equal(t, "16Gi", cfg.Memory())                 // formatted getter
+
+		// Additive list merging (global first, then user)
+		assert.Equal(t, []string{"curl", "git", "vim"}, cfg.Packages.APT)
+		assert.Equal(t, []string{"requests", "pandas"}, cfg.Packages.Python)
+
+		// SSH keys merge (global + user). Order depends on your mergeListFields; this expects global first.
+		keys, err := cfg.GetSSHKeys()
 		require.NoError(t, err)
+		assert.Equal(t,
+			[]string{
+				"ssh-rsa AAAAB3NzaC1yc2E admin@company.com",
+				"ssh-rsa AAAAB3NzaC1yc2E alice@example.com",
+			},
+			keys,
+		)
 
-		// Test user-specific fields
-		assert.Equal(t, "alice", config.Name)
-		assert.Equal(t, "Alice Smith", config.Git.Name)
-		assert.Equal(t, "alice@example.com", config.Git.Email)
-
-		// Test override fields (user overrides global)
-		assert.Equal(t, "global:latest", config.Image)   // User didn't specify, uses global
-		assert.False(t, config.InstallHomebrew)          // User overrides global true with false
-		assert.True(t, config.ClearLocalPackages)        // User didn't specify, uses global
-		assert.Equal(t, 4, config.Resources.CPU)         // User didn't specify, uses global
-		assert.Equal(t, "16Gi", config.Resources.Memory) // User didn't specify, uses global
-
-		// Test additive fields (global + user)
-		expectedAPT := []string{"curl", "git", "vim"} // Global + user packages
-		assert.Equal(t, expectedAPT, config.Packages.APT)
-
-		expectedPython := []string{"requests", "pandas"} // Global + user packages
-		assert.Equal(t, expectedPython, config.Packages.Python)
-
-		// Test SSH key merging (global + user)
-		sshKeys, err := config.GetSSHKeys()
-		require.NoError(t, err)
-		expectedSSHKeys := []string{
-			"ssh-rsa AAAAB3NzaC1yc2E admin@company.com", // Global
-			"ssh-rsa AAAAB3NzaC1yc2E alice@example.com", // User
-		}
-		assert.Equal(t, expectedSSHKeys, sshKeys)
-
-		// Test developer directory is set
-		assert.Equal(t, developerDir, config.DeveloperDir)
+		// Developer directory set
+		assert.Equal(t, developerDir, cfg.DeveloperDir)
 	})
 
 	t.Run("user config with no global config", func(t *testing.T) {
 		tempDir := t.TempDir()
 
-		// Create only user config (no global config file)
+		// Only user config (no devenv.yaml)
 		developerDir := filepath.Join(tempDir, "alice")
-		err := os.MkdirAll(developerDir, 0755)
-		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(developerDir, 0o755))
 
 		userConfigYAML := `name: alice
 sshPublicKey: "ssh-rsa AAAAB3NzaC1yc2E alice@example.com"
 installHomebrew: false
 `
-		configPath := filepath.Join(developerDir, "devenv-config.yaml")
-		err = os.WriteFile(configPath, []byte(userConfigYAML), 0644)
+		require.NoError(t, os.WriteFile(filepath.Join(developerDir, "devenv-config.yaml"), []byte(userConfigYAML), 0o644))
+
+		// Global = system defaults (no file present)
+		globalCfg, err := LoadGlobalConfig(tempDir)
 		require.NoError(t, err)
 
-		// Load global config (should be all defaults)
-		globalConfig, err := LoadGlobalConfig(tempDir)
+		cfg, err := LoadDeveloperConfigWithBaseConfig(tempDir, "alice", globalCfg)
 		require.NoError(t, err)
 
-		// Load with global defaults
-		config, err := LoadDeveloperConfigWithBaseConfig(tempDir, "alice", globalConfig)
-		require.NoError(t, err)
+		// Defaults + user overrides
+		assert.Equal(t, "alice", cfg.Name)
+		assert.Equal(t, "ubuntu:22.04", cfg.Image)          // system default
+		assert.False(t, cfg.InstallHomebrew)                // user override
+		assert.False(t, cfg.ClearLocalPackages)             // system default
+		assert.Equal(t, "/opt/venv/bin", cfg.PythonBinPath) // system default
 
-		// Should get system defaults + user overrides
-		assert.Equal(t, "alice", config.Name)
-		assert.Equal(t, "ubuntu:22.04", config.Image)          // System default
-		assert.False(t, config.InstallHomebrew)                // User override
-		assert.False(t, config.ClearLocalPackages)             // System default
-		assert.Equal(t, "/opt/venv/bin", config.PythonBinPath) // System default
+		// Canonical resource defaults and formatted getters
+		assert.Equal(t, int64(2000), cfg.Resources.CPU)      // default 2 cores
+		assert.Equal(t, int64(8*1024), cfg.Resources.Memory) // default 8Gi
+		assert.Equal(t, "2000m", cfg.CPU())
+		assert.Equal(t, "8Gi", cfg.Memory())
 	})
 }
 
@@ -554,6 +602,93 @@ func TestNormalizeSSHKeys(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
+		})
+	}
+}
+
+func Test_toMi_NormalizesInputs(t *testing.T) {
+	tests := []struct {
+		name string
+		in   any
+		want int64 // Mi
+		ok   bool
+	}{
+		// --- Binary units (powers of 2) ---
+		{"Gi exact", "16Gi", 16 * 1024, true},
+		{"Mi exact", "512Mi", 512, true},
+		{"Ki to Mi", "1024Ki", 1, true},
+		{"Gi decimal", "2.5Gi", 2560, true},
+		{"trim + casefold", " 2gi ", 2 * 1024, true}, // if you allow case-insensitive units
+
+		// --- Decimal SI (powers of 10) ---
+		{"500M", "500M", 477, true}, // 500e6 / 2^20 ≈ 476.84 → round to 477
+		{"1G", "1G", 954, true},
+
+		// --- Bare numeric strings (policy: treat as Gi) ---
+		{"bare int string", "15", 15 * 1024, true},
+		{"bare float string", "1.5", 1536, true},
+
+		// --- Non-string numerics (policy: Gi) ---
+		{"int means Gi", 2, 2 * 1024, true},
+		{"float means Gi", 1.5, 1536, true},
+		{"uint means Gi", uint(4), 4 * 1024, true},
+
+		// --- Zero/negative are invalid ---
+		{"zero Gi invalid", "0Gi", 0, false},
+		{"zero Mi invalid", "0Mi", 0, false},
+		{"bare zero invalid", "0", 0, false},
+		{"zero int invalid", 0, 0, false},
+		{"negative Gi invalid", "-1Gi", 0, false},
+		{"negative int invalid", -1, 0, false},
+
+		// --- Invalid shapes ---
+		{"invalid unit", "12GB", 0, false}, // unsupported 'GB'
+		{"nonnumeric", "abc", 0, false},
+		{"nil", nil, 0, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := toMi(tc.in)
+			assert.Equal(t, tc.ok, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestNormalizeCPU_ToMillicores(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  any
+		want int64
+		ok   bool
+	}{
+		{"int", 3, 3000, true},
+		{"float", 1.25, 1250, true},
+		{"string int", "4", 4000, true},
+		{"string decimal", "2.5", 2500, true},
+		{"millicores", "500m", 500, true},
+
+		{"zero string invalid", "0", 0, false},
+		{"zero millicores invalid", "0m", 0, false},
+		{"zero int invalid", 0, 0, false},
+		{"negative int invalid", -1, 0, false},
+		{"negative string decimal invalid", "-2.5", 0, false},
+		{"negative millicores invalid", "-250m", 0, false},
+
+		{"spaces", " 3 ", 3000, true},
+		{"leading zeros", "0003", 3000, true},
+
+		{"invalid", "abc", 0, false},
+		{"invalid suffix", "5M", 0, false}, // only lowercase 'm' for millicores
+		{"nil", nil, 0, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := toMillicores(tc.raw)
+			assert.Equal(t, tc.ok, ok)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

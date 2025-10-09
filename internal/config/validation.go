@@ -43,56 +43,6 @@ func validateSSHKeys(fl validator.FieldLevel) bool {
 	return true
 }
 
-// normalizeSSHKeys converts the flexible SSH key field to a string slice
-// Handles both single string and string array formats from YAML
-func normalizeSSHKeys(sshKeyField any) ([]string, error) {
-	if sshKeyField == nil {
-		return []string{}, nil
-	}
-
-	switch keys := sshKeyField.(type) {
-	case string:
-		// Single SSH key
-		if keys == "" {
-			return []string{}, fmt.Errorf("SSH key cannot be empty string")
-		}
-		return []string{keys}, nil
-
-	case []interface{}:
-		// Array of SSH keys (from YAML)
-		var result []string
-		for i, key := range keys {
-			keyStr, ok := key.(string)
-			if !ok {
-				return nil, fmt.Errorf("SSH key at index %d is not a string", i)
-			}
-			if keyStr == "" {
-				return nil, fmt.Errorf("SSH key at index %d cannot be empty", i)
-			}
-			result = append(result, keyStr)
-		}
-		if len(result) == 0 {
-			return nil, fmt.Errorf("SSH key array cannot be empty")
-		}
-		return result, nil
-
-	case []string:
-		// Direct string slice
-		if len(keys) == 0 {
-			return nil, fmt.Errorf("SSH key array cannot be empty")
-		}
-		for i, key := range keys {
-			if key == "" {
-				return nil, fmt.Errorf("SSH key at index %d cannot be empty", i)
-			}
-		}
-		return keys, nil
-
-	default:
-		return nil, fmt.Errorf("SSH key field must be string or array of strings, got %T", sshKeyField)
-	}
-}
-
 func validateKubernetesCPU(fl validator.FieldLevel) bool {
 	cpuField := fl.Field().Interface()
 	switch cpu := cpuField.(type) {

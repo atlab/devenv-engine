@@ -31,8 +31,8 @@ func TestRenderTemplate(t *testing.T) {
 				APT:    []string{"vim", "curl"},
 			},
 			Resources: config.ResourceConfig{
-				CPU:     "4",
-				Memory:  "16Gi",
+				CPU:     4000,
+				Memory:  16 * 1024,
 				Storage: "100Gi",
 				GPU:     2,
 			},

@@ -66,11 +66,11 @@ spec:
         resources:
           limits:
             nvidia.com/gpu: "2"
-            cpu: "4"
+            cpu: "4000m"
             memory: "16Gi"
           requests:
             nvidia.com/gpu: 2
-            cpu: "4"
+            cpu: "4000m"
             memory: "16Gi"
             
         volumeMounts:

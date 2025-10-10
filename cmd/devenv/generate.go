@@ -309,11 +309,24 @@ func printConfigSummary(cfg *config.DevEnvConfig) {
 		fmt.Printf("  Git: %s <%s>\n", cfg.Git.Name, cfg.Git.Email)
 	}
 
-	if cfg.Resources.CPU != nil || cfg.Resources.Memory != "" {
-		cpuStr := formatCPU(cfg.Resources.CPU)
-		fmt.Printf("  Resources: CPU=%s, Memory=%s, GPU=%d\n",
-			cpuStr, cfg.Resources.Memory, cfg.Resources.GPU)
+	cpuStr := cfg.CPU()    // e.g., "4000m" or "0"
+	memStr := cfg.Memory() // e.g., "16Gi" or ""
 
+	hasCPU := cpuStr != "0"
+	hasMem := memStr != ""
+
+	if hasCPU || hasMem {
+		fmt.Printf("  Resources:")
+		if hasCPU {
+			fmt.Printf(" CPU=%s", cpuStr)
+		}
+		if hasMem {
+			if hasCPU {
+				fmt.Printf(",")
+			}
+			fmt.Printf(" Memory=%s", memStr)
+		}
+		fmt.Println()
 	}
 
 	if len(cfg.Volumes) > 0 {

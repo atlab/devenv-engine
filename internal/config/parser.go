@@ -36,12 +36,20 @@ func LoadGlobalConfig(configDir string) (*BaseConfig, error) {
 		return nil, fmt.Errorf("failed to parse YAML in global config %s: %w", globalConfigPath, err)
 	}
 
+	// Normalize CPU (raw may be string/int/float/nil)
 	if err := normalizeCPU(&globalConfig.Resources); err != nil {
-		return nil, fmt.Errorf("normalize cpu: %w", err)
+		return nil, fmt.Errorf(
+			"failed to normalize CPU in %q (cpu=%v): %w",
+			globalConfigPath, globalConfig.Resources.CPURaw, err,
+		)
 	}
 
+	// Normalize Memory (raw may be string/int/float/nil)
 	if err := normalizeMemory(&globalConfig.Resources); err != nil {
-		return nil, fmt.Errorf("normalize memory: %w", err)
+		return nil, fmt.Errorf(
+			"failed to normalize memory in %q (memory=%v): %w",
+			globalConfigPath, globalConfig.Resources.MemoryRaw, err,
+		)
 	}
 	return &globalConfig, nil
 }
@@ -78,12 +86,18 @@ func LoadDeveloperConfig(configDir, developerName string) (*DevEnvConfig, error)
 
 	config.DeveloperDir = developerDir
 
+	// Normalize flexible → canonical
 	if err := normalizeCPU(&config.Resources); err != nil {
-		return nil, fmt.Errorf("normalize cpu: %w", err)
+		return nil, fmt.Errorf(
+			"failed to normalize CPU in %q (cpu=%v): %w",
+			configPath, config.Resources.CPURaw, err,
+		)
 	}
-
 	if err := normalizeMemory(&config.Resources); err != nil {
-		return nil, fmt.Errorf("normalize memory: %w", err)
+		return nil, fmt.Errorf(
+			"failed to normalize memory in %q (memory=%v): %w",
+			configPath, config.Resources.MemoryRaw, err,
+		)
 	}
 
 	// Basic validation
@@ -132,12 +146,18 @@ func LoadDeveloperConfigWithBaseConfig(configDir, developerName string, baseConf
 	userConfig.DeveloperDir = developerDir
 
 	// Step 7: Normalize flexible/raw fields → canonical representation
+	// Normalize flexible → canonical
 	if err := normalizeCPU(&userConfig.Resources); err != nil {
-		return nil, fmt.Errorf("normalize cpu: %w", err)
+		return nil, fmt.Errorf(
+			"failed to normalize CPU in %q (cpu=%v): %w",
+			configPath, userConfig.Resources.CPURaw, err,
+		)
 	}
-
 	if err := normalizeMemory(&userConfig.Resources); err != nil {
-		return nil, fmt.Errorf("normalize memory: %w", err)
+		return nil, fmt.Errorf(
+			"failed to normalize memory in %q (memory=%v): %w",
+			configPath, userConfig.Resources.MemoryRaw, err,
+		)
 	}
 
 	if err := userConfig.Validate(); err != nil {

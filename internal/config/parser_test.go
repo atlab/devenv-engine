@@ -35,9 +35,9 @@ resources:
 		assert.Equal(t, "custom:latest", cfg.Image)
 		assert.False(t, cfg.InstallHomebrew) // override default true
 
-		// Canonical resource units: CPU in millicores, Memory in Mi
-		assert.Equal(t, int64(4000), cfg.Resources.CPU)       // 4 cores -> 4000m
-		assert.Equal(t, int64(16*1024), cfg.Resources.Memory) // 16Gi -> 16384 Mi
+		// Raw resource units
+		assert.Equal(t, int(4), cfg.Resources.CPU)
+		assert.Equal(t, string("16Gi"), cfg.Resources.Memory)
 
 		// Also verify formatted getters via DevEnvConfig wrapper
 		dev := &DevEnvConfig{BaseConfig: *cfg}
@@ -72,8 +72,8 @@ resources:
 		assert.Equal(t, 1000, cfg.UID)
 
 		// Canonical resource defaults (CPU millicores, Memory Mi)
-		assert.Equal(t, int64(2000), cfg.Resources.CPU)      // 2 cores
-		assert.Equal(t, int64(8*1024), cfg.Resources.Memory) // 8Gi
+		assert.Equal(t, int(2), cfg.Resources.CPU)           // 2 cores
+		assert.Equal(t, string("8Gi"), cfg.Resources.Memory) // 8Gi
 		assert.Equal(t, "20Gi", cfg.Resources.Storage)
 		assert.Equal(t, 0, cfg.Resources.GPU)
 
@@ -138,9 +138,9 @@ resources:
 		assert.Equal(t, []string{"numpy", "pandas"}, cfg.Packages.Python)
 		assert.Equal(t, []string{"vim"}, cfg.Packages.APT)
 
-		// Canonical resources: CPU millicores, Memory Mi
-		assert.Equal(t, int64(4000), cfg.Resources.CPU)       // 4 cores → 4000m
-		assert.Equal(t, int64(16*1024), cfg.Resources.Memory) // 16Gi → 16384 Mi
+		// Raw Resources
+		assert.Equal(t, int(4), cfg.Resources.CPU)
+		assert.Equal(t, string("16Gi"), cfg.Resources.Memory)
 
 		// Getter formatting (K8s quantities)
 		assert.Equal(t, "4000m", cfg.CPU())
@@ -271,10 +271,10 @@ git:
 		assert.True(t, cfg.ClearLocalPackages)      // inherited from global
 
 		// Canonical resource units (CPU millicores, Memory MiB)
-		assert.Equal(t, int64(4000), cfg.Resources.CPU)       // 4 cores → 4000m
-		assert.Equal(t, int64(16*1024), cfg.Resources.Memory) // 16Gi → 16384Mi
-		assert.Equal(t, "4000m", cfg.CPU())                   // formatted getter
-		assert.Equal(t, "16Gi", cfg.Memory())                 // formatted getter
+		assert.Equal(t, int(4), cfg.Resources.CPU)
+		assert.Equal(t, string("16Gi"), cfg.Resources.Memory)
+		assert.Equal(t, "4000m", cfg.CPU())   // formatted getter
+		assert.Equal(t, "16Gi", cfg.Memory()) // formatted getter
 
 		// Additive list merging (global first, then user)
 		assert.Equal(t, []string{"curl", "git", "vim"}, cfg.Packages.APT)
@@ -323,8 +323,8 @@ installHomebrew: false
 		assert.Equal(t, "/opt/venv/bin", cfg.PythonBinPath) // system default
 
 		// Canonical resource defaults and formatted getters
-		assert.Equal(t, int64(2000), cfg.Resources.CPU)      // default 2 cores
-		assert.Equal(t, int64(8*1024), cfg.Resources.Memory) // default 8Gi
+		assert.Equal(t, int(2), cfg.Resources.CPU)           // default 2 cores
+		assert.Equal(t, string("8Gi"), cfg.Resources.Memory) // default 8Gi
 		assert.Equal(t, "2000m", cfg.CPU())
 		assert.Equal(t, "8Gi", cfg.Memory())
 	})
@@ -602,93 +602,6 @@ func TestNormalizeSSHKeys(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
-		})
-	}
-}
-
-func Test_toMi_NormalizesInputs(t *testing.T) {
-	tests := []struct {
-		name string
-		in   any
-		want int64 // Mi
-		ok   bool
-	}{
-		// --- Binary units (powers of 2) ---
-		{"Gi exact", "16Gi", 16 * 1024, true},
-		{"Mi exact", "512Mi", 512, true},
-		{"Ki to Mi", "1024Ki", 1, true},
-		{"Gi decimal", "2.5Gi", 2560, true},
-		{"trim + casefold", " 2gi ", 2 * 1024, true}, // if you allow case-insensitive units
-
-		// --- Decimal SI (powers of 10) ---
-		{"500M", "500M", 477, true}, // 500e6 / 2^20 ≈ 476.84 → round to 477
-		{"1G", "1G", 954, true},
-
-		// --- Bare numeric strings (policy: treat as Gi) ---
-		{"bare int string", "15", 15 * 1024, true},
-		{"bare float string", "1.5", 1536, true},
-
-		// --- Non-string numerics (policy: Gi) ---
-		{"int means Gi", 2, 2 * 1024, true},
-		{"float means Gi", 1.5, 1536, true},
-		{"uint means Gi", uint(4), 4 * 1024, true},
-
-		// --- Zero/negative are invalid ---
-		{"zero Gi invalid", "0Gi", 0, false},
-		{"zero Mi invalid", "0Mi", 0, false},
-		{"bare zero invalid", "0", 0, false},
-		{"zero int invalid", 0, 0, false},
-		{"negative Gi invalid", "-1Gi", 0, false},
-		{"negative int invalid", -1, 0, false},
-
-		// --- Invalid shapes ---
-		{"invalid unit", "12GB", 0, false}, // unsupported 'GB'
-		{"nonnumeric", "abc", 0, false},
-		{"nil", nil, 0, false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := toMi(tc.in)
-			assert.Equal(t, tc.ok, ok)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-func TestNormalizeCPU_ToMillicores(t *testing.T) {
-	tests := []struct {
-		name string
-		raw  any
-		want int64
-		ok   bool
-	}{
-		{"int", 3, 3000, true},
-		{"float", 1.25, 1250, true},
-		{"string int", "4", 4000, true},
-		{"string decimal", "2.5", 2500, true},
-		{"millicores", "500m", 500, true},
-
-		{"zero string invalid", "0", 0, false},
-		{"zero millicores invalid", "0m", 0, false},
-		{"zero int invalid", 0, 0, false},
-		{"negative int invalid", -1, 0, false},
-		{"negative string decimal invalid", "-2.5", 0, false},
-		{"negative millicores invalid", "-250m", 0, false},
-
-		{"spaces", " 3 ", 3000, true},
-		{"leading zeros", "0003", 3000, true},
-
-		{"invalid", "abc", 0, false},
-		{"invalid suffix", "5M", 0, false}, // only lowercase 'm' for millicores
-		{"nil", nil, 0, false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := toMillicores(tc.raw)
-			assert.Equal(t, tc.ok, ok)
-			assert.Equal(t, tc.want, got)
 		})
 	}
 }

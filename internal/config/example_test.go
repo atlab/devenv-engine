@@ -46,7 +46,7 @@ func ExampleDevEnvConfig_CPU() {
 		Name: "alice",
 		BaseConfig: config.BaseConfig{
 			Resources: config.ResourceConfig{
-				CPU: 8000, // String value
+				CPU: 8, // String value
 			},
 		},
 	}
@@ -72,7 +72,7 @@ func ExampleDevEnvConfig_CPU() {
 
 	// Output:
 	// String CPU: 8000m
-	// Integer CPU: 4m
+	// Integer CPU: 4000m
 	// Default CPU: 0
 }
 

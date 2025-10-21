@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nauticalab/devenv-engine/internal/config"
@@ -316,17 +317,14 @@ func printConfigSummary(cfg *config.DevEnvConfig) {
 	hasMem := memStr != ""
 
 	if hasCPU || hasMem {
-		fmt.Printf("  Resources:")
+		var parts []string
 		if hasCPU {
-			fmt.Printf(" CPU=%s", cpuStr)
+			parts = append(parts, fmt.Sprintf("CPU=%s", cpuStr))
 		}
 		if hasMem {
-			if hasCPU {
-				fmt.Printf(",")
-			}
-			fmt.Printf(" Memory=%s", memStr)
+			parts = append(parts, fmt.Sprintf("Memory=%s", memStr))
 		}
-		fmt.Println()
+		fmt.Printf("  Resources: %s\n", strings.Join(parts, ", "))
 	}
 
 	if len(cfg.Volumes) > 0 {

@@ -73,12 +73,10 @@ type PackageConfig struct {
 
 // ResourceConfig represents resource allocation
 type ResourceConfig struct {
-	CPURaw    any    `yaml:"cpu,omitempty" validate:"omitempty,k8s_cpu"` // Can be string or int
-	MemoryRaw any    `yaml:"memory,omitempty" validate:"omitempty,k8s_memory"`
-	CPU       int64  `yaml:"-"` // canonical
-	Memory    int64  `yaml:"-"` // canonical
-	Storage   string `yaml:"storage,omitempty" validate:"omitempty,k8s_memory"`
-	GPU       int    `yaml:"gpu,omitempty" validate:"omitempty,min=0,max=8"` // Number of GPUs requested
+	CPU     any    `yaml:"cpu,omitempty" validate:"omitempty,k8s_cpu"`
+	Memory  any    `yaml:"memory,omitempty" validate:"omitempty,k8s_memory"`
+	Storage string `yaml:"storage,omitempty" validate:"omitempty,k8s_memory"`
+	GPU     int    `yaml:"gpu,omitempty" validate:"omitempty,min=0,max=8"` // Number of GPUs requested
 }
 
 // VolumeMount represents a volume mount configuration
@@ -106,10 +104,10 @@ func NewBaseConfigWithDefaults() BaseConfig {
 		ClearVSCodeCache:   false,
 		PythonBinPath:      "/opt/venv/bin",
 		Resources: ResourceConfig{
-			CPU:     2000,     // Default CPU (2 cores)
-			Memory:  8 * 1024, // Default Memory (8Gi -> 8192Mi)
-			Storage: "20Gi",   // Default Storage
-			GPU:     0,        // Default GPU
+			CPU:     2,      // Default CPU
+			Memory:  "8Gi",  // Default Memory
+			Storage: "20Gi", // Default Storage
+			GPU:     0,      // Default GPU
 		},
 		Packages: PackageConfig{
 			Python: []string{}, // Empty slice - no default packages
@@ -160,25 +158,23 @@ func (c *DevEnvConfig) GPU() int {
 // Assumes Resources.CPU has already been normalized to millicores.
 // Returns "0" if CPU <= 0 so callers can omit the field or treat as no request.
 func (c *DevEnvConfig) CPU() string {
-	if c.Resources.CPU <= 0 {
+	CPU_in_millicores, err := c.Resources.getCanonicalCPU()
+	if err != nil || CPU_in_millicores <= 0 {
 		return "0"
 	}
-	return fmt.Sprintf("%dm", c.Resources.CPU)
+	return fmt.Sprintf("%dm", CPU_in_millicores)
 }
 
-// Memory returns the canonical memory quantity formatted for Kubernetes.
-// Assumes Resources.Memory has been normalized to Mi (mebibytes).
-// Returns "" if Memory <= 0 so callers can omit the field.
-// Uses "Gi" when an exact Gi multiple, otherwise "Mi".
+// Memory returns "Gi" or "Mi" ("" means omit).
 func (c *DevEnvConfig) Memory() string {
-	mi := c.Resources.Memory
-	if mi <= 0 {
+	memory_in_Mi, err := c.Resources.getCanonicalMemory()
+	if err != nil || memory_in_Mi <= 0 {
 		return ""
 	}
-	if mi%1024 == 0 {
-		return fmt.Sprintf("%dGi", mi/1024)
+	if memory_in_Mi%1024 == 0 {
+		return fmt.Sprintf("%dGi", memory_in_Mi/1024)
 	}
-	return fmt.Sprintf("%dMi", mi)
+	return fmt.Sprintf("%dMi", memory_in_Mi)
 }
 
 // CPURequest returns the CPU resource request as a string suitable for Kubernetes manifests.

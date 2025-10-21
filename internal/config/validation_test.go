@@ -80,7 +80,6 @@ func TestValidator_K8SCPU(t *testing.T) {
 		// Accept numerics
 		{"int", 3, true},
 		{"float64", 1.25, true},
-		{"uint", uint(4), true},
 
 		// Reject negatives / junk
 		{"negative string", "-1", false},

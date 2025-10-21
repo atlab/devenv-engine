@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -106,23 +107,11 @@ func validateKubernetesCPU(fl validator.FieldLevel) bool {
 
 	case int:
 		return v >= 0
-	case int8:
-		return v >= 0
-	case int16:
-		return v >= 0
-	case int32:
-		return v >= 0
 	case int64:
 		return v >= 0
 
-	case uint, uint8, uint16, uint32, uint64:
-		// Unsigned are non-negative by definition.
-		return true
-
-	case float32:
-		return !float32IsNaNOrInf(v) && v >= 0
 	case float64:
-		return !float64IsNaNOrInf(v) && v >= 0
+		return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
 
 	default:
 		return false
@@ -161,22 +150,12 @@ func validateKubernetesMemory(fl validator.FieldLevel) bool {
 
 	case int:
 		return v >= 0
-	case int8:
-		return v >= 0
-	case int16:
-		return v >= 0
-	case int32:
-		return v >= 0
+
 	case int64:
 		return v >= 0
 
-	case uint, uint8, uint16, uint32, uint64:
-		return true
-
-	case float32:
-		return !float32IsNaNOrInf(v) && v >= 0
 	case float64:
-		return !float64IsNaNOrInf(v) && v >= 0
+		return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
 
 	default:
 		return false
@@ -200,13 +179,14 @@ func ValidateDevEnvConfig(config *DevEnvConfig) error {
 		return fmt.Errorf("at least one SSH public key is required")
 	}
 
-	// Canonical resources (already normalized) must be non-negative.
-	if config.Resources.CPU < 0 {
-		return fmt.Errorf("cpu must be >= 0")
+	if mc, err := config.Resources.getCanonicalCPU(); err != nil || mc < 0 {
+		return err // "cpu must be >= 0"
 	}
-	if config.Resources.Memory < 0 {
-		return fmt.Errorf("memory must be >= 0")
+
+	if mi, err := config.Resources.getCanonicalMemory(); err != nil || mi < 0 {
+		return err // "memory must be >= 0"
 	}
+
 	if config.Resources.GPU < 0 {
 		return fmt.Errorf("gpu must be >= 0")
 	}
@@ -272,12 +252,4 @@ func formatFieldError(fieldError validator.FieldError) string {
 	default:
 		return fmt.Sprintf("'%s' failed validation '%s', got '%v'", fieldName, tag, value)
 	}
-}
-
-// Small float guards for validator predicates (avoid NaN/Inf).
-func float32IsNaNOrInf(f float32) bool {
-	return f != f || f > 1e38 || f < -1e38
-}
-func float64IsNaNOrInf(f float64) bool {
-	return f != f || f > 1e308 || f < -1e308
 }

@@ -8,10 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNewBaseConfigWithDefaults verifies that the factory defaults produce a
-// ready-to-use config with canonical resource units and non-nil empty slices.
-// This test documents the contract of NewBaseConfigWithDefaults so future changes
-// (e.g., image tag, default resources, or slice initialization) don’t regress silently.
+// TestNewBaseConfigWithDefaults verifies non-parsed or normalized factory defaults
 func TestNewBaseConfigWithDefaults(t *testing.T) {
 	cfg := NewBaseConfigWithDefaults()
 
@@ -25,21 +22,15 @@ func TestNewBaseConfigWithDefaults(t *testing.T) {
 	assert.False(t, cfg.ClearLocalPackages)
 	assert.False(t, cfg.ClearVSCodeCache)
 
-	// --- Resource defaults (canonical units) ---
-	// Canonical CPU is millicores; default should be 2 cores = 2000m.
-	assert.Equal(t, int64(2000), cfg.Resources.CPU)
-	// Canonical Memory is Mi; default should be 8 Gi = 8192 Mi.
-	assert.Equal(t, int64(8192), cfg.Resources.Memory)
+	// --- Resources  ---
+	assert.Equal(t, 2, cfg.Resources.CPU)
+	assert.Equal(t, "8Gi", cfg.Resources.Memory)
 	assert.Equal(t, "20Gi", cfg.Resources.Storage)
 	assert.Equal(t, 0, cfg.Resources.GPU)
 
 	// Also assert getters render the canonical values as expected (future-proofing).
 	assert.Equal(t, "2000m", (&DevEnvConfig{BaseConfig: cfg}).CPU())
 	assert.Equal(t, "8Gi", (&DevEnvConfig{BaseConfig: cfg}).Memory())
-
-	// Raw fields should be empty in defaults (we set canonical values directly).
-	assert.Nil(t, cfg.Resources.CPURaw)
-	assert.Nil(t, cfg.Resources.MemoryRaw)
 
 	// --- Empty-but-non-nil slices (ergonomic contract) ---
 	// Callers can append without nil checks; order is preserved.
@@ -165,19 +156,38 @@ func TestDevEnvConfig_GetUserID(t *testing.T) {
 	}
 }
 
-// TestDevEnvConfig_CPU_Format verifies that CPU() is a pure formatter over the
-// canonical millicores field (Resources.CPU). It does not parse raw inputs or
-// apply defaults—those happen during normalization.
-func TestDevEnvConfig_CPU_Format(t *testing.T) {
+// TestDevEnvConfig_CPU_Format verifies that CPU() is correctly formatting cpu information to millicores.
+func TestDevEnvConfig_CPU(t *testing.T) {
 	tests := []struct {
 		name  string
-		milli int64
+		milli any
 		want  string
 	}{
-		{name: "zero -> 0", milli: 0, want: "0"},
-		{name: "positive -> Xm", milli: 2500, want: "2500m"},
-		{name: "large -> Xm", milli: 123456, want: "123456m"},
-		{name: "negative clamps", milli: -1, want: "0"},
+		// int
+		{name: "int, positive -> Xm", milli: 23, want: "23000m"},
+		{name: "int, negative -> 0", milli: -42, want: "0"},
+		{name: "int, zero -> 0", milli: 0, want: "0"},
+
+		// float
+		{name: "float, positive -> Xm", milli: 77.3, want: "77300m"},
+		{name: "float, negative -> 0", milli: -223.21, want: "0"},
+		{name: "float, zero -> 0", milli: 0.0, want: "0"},
+
+		// string
+		{name: "string containing: int, positive -> Xm", milli: 89, want: "89000m"},
+		{name: "string containing: int, negative -> 0", milli: -37, want: "0"},
+		{name: "string containing: int, zero -> 0", milli: 0, want: "0"},
+		{name: "string containing: float, positive -> Xm", milli: 34.7, want: "34700m"},
+		{name: "string containing: float, negative -> 0", milli: -2.1, want: "0"},
+		{name: "string containing: float, zero -> 0", milli: 0.0, want: "0"},
+
+		// string that contains 'm'
+		{name: "m-string containing: int, positive -> Xm", milli: "89m", want: "89m"},
+		{name: "m-string containing: int, negative -> 0", milli: "-37m", want: "0"},
+		{name: "m-string containing: int, zero -> 0", milli: "0", want: "0"},
+		{name: "m-string containing: float, positive -> Xm", milli: "34.7m", want: "0"}, // Cannot have fractions of millicores
+		{name: "m-string containing: float, negative -> 0", milli: "-2.1m", want: "0"},
+		{name: "m-string containing: float, zero -> 0", milli: "0.0m", want: "0"},
 	}
 
 	for _, tc := range tests {
@@ -192,39 +202,38 @@ func TestDevEnvConfig_CPU_Format(t *testing.T) {
 	}
 }
 
-// CPU() must format canonical Resources.CPU and ignore CPURaw if canonical isn't set.
-func TestDevEnvConfig_CPU_IgnoresRawWithoutNormalization(t *testing.T) {
-	// Raw provided, canonical zero => CPU() should not look at CPURaw.
-	cfg := &DevEnvConfig{
-		BaseConfig: BaseConfig{
-			Resources: ResourceConfig{CPURaw: "2.5", CPU: 0},
-		},
-	}
-	require.Equal(t, "0", cfg.CPU())
-
-	// Canonical set => CPU() formats it regardless of CPURaw.
-	cfg2 := &DevEnvConfig{
-		BaseConfig: BaseConfig{
-			Resources: ResourceConfig{CPURaw: "bad", CPU: 2500},
-		},
-	}
-	require.Equal(t, "2500m", cfg2.CPU())
-}
-
-// TestDevEnvConfig_Memory_Format verifies that Memory() is a pure formatter over the
-// canonical Mi field (Resources.Memory). It does not parse raw inputs; normalization
-// must have already populated Memory in MiB. Exact Gi multiples render as "Gi", otherwise "Mi".
-func TestDevEnvConfig_Memory_Format(t *testing.T) {
+// TestDevEnvConfig_Memory verifies that Memory() is correctly formatting memory information.
+func TestDevEnvConfig_Memory(t *testing.T) {
 	tests := []struct {
 		name  string
-		memMi int64
+		memMi any
 		want  string
 	}{
-		{name: "zero -> empty", memMi: 0, want: ""},
-		{name: "exact Gi prints Gi", memMi: 16 * 1024, want: "16Gi"},
-		{name: "non-Gi prints Mi", memMi: 1536, want: "1536Mi"}, // 1.5 Gi
-		{name: "small Mi prints Mi", memMi: 477, want: "477Mi"},
-		{name: "negative -> empty", memMi: -1, want: ""},
+		// int
+		{name: "int, zero -> empty", memMi: 0, want: ""},
+		{name: "int, positive -> XGi", memMi: 1, want: "1Gi"},
+		{name: "int, negative -> empty", memMi: -1, want: ""},
+
+		// float
+		{name: "float, positive -> XMi", memMi: 1.5, want: "1536Mi"},
+		{name: "float, negative -> XMi", memMi: -1.5, want: ""},
+		{name: "float, zero -> XMi", memMi: 0.0, want: ""},
+
+		// string
+		{name: "string containing: int, positive -> XMi", memMi: "1", want: "1Gi"},
+		{name: "string containing: int, negative -> XMi", memMi: "-1", want: ""},
+		{name: "string containing: int, zero -> XMi", memMi: "0", want: ""},
+		{name: "string containing: float, positive -> XMi", memMi: "1.1", want: "1126Mi"},
+		{name: "string containing: float, negative -> XMi", memMi: "-1.0", want: ""},
+		{name: "string containing: float, zero -> XMi", memMi: "0.0", want: ""},
+
+		//string with suffix
+		{name: "suffix-string containing: int, positive -> XMi", memMi: "1Gi", want: "1Gi"},
+		{name: "suffix-string containing: int, negative -> XMi", memMi: "-1Ki", want: ""},
+		{name: "suffix-string containing: int, zero -> XMi", memMi: "0Gi", want: ""},
+		{name: "suffix-string containing: float, positive -> XMi", memMi: "1.0Ti", want: "1024Gi"},
+		{name: "suffix-string containing: float, negative -> XMi", memMi: "-1.4Ei", want: ""},
+		{name: "suffix-string containing: float, zero -> XMi", memMi: "0.0Pi", want: ""},
 	}
 
 	for _, tc := range tests {
@@ -235,53 +244,6 @@ func TestDevEnvConfig_Memory_Format(t *testing.T) {
 				},
 			}
 			assert.Equal(t, tc.want, cfg.Memory())
-		})
-	}
-}
-
-// Memory() must format canonical Resources.Memory and ignore MemoryRaw if canonical isn't set.
-func TestDevEnvConfig_Memory_IgnoresRawWithoutNormalization(t *testing.T) {
-	cfg := &DevEnvConfig{
-		BaseConfig: BaseConfig{
-			Resources: ResourceConfig{MemoryRaw: "1.5Gi", Memory: 0},
-		},
-	}
-	require.Equal(t, "", cfg.Memory())
-
-	cfg2 := &DevEnvConfig{
-		BaseConfig: BaseConfig{
-			Resources: ResourceConfig{MemoryRaw: "bad", Memory: 1536},
-		},
-	}
-	require.Equal(t, "1536Mi", cfg2.Memory())
-}
-
-// TestDevEnvConfig_Memory_FormatFromCanonical verifies that Memory() is a pure
-// formatter over the canonical Mi field (Resources.Memory). Exact Gi multiples
-// render with "Gi"; all other positive values render with "Mi"; non-positive
-// values render as an empty string.
-func TestDevEnvConfig_Memory_FormatFromCanonical(t *testing.T) {
-	tests := []struct {
-		name   string
-		memory int64 // canonical Mi
-		want   string
-	}{
-		{name: "zero -> empty", memory: 0, want: ""},
-		{name: "negative -> empty", memory: -1, want: ""},
-		{name: "exact Gi", memory: 16 * 1024, want: "16Gi"},
-		{name: "non-Gi (1.5Gi)", memory: 1536, want: "1536Mi"},
-		{name: "non-Gi (small Mi)", memory: 477, want: "477Mi"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := &DevEnvConfig{
-				BaseConfig: BaseConfig{
-					Resources: ResourceConfig{Memory: tc.memory},
-				},
-			}
-			got := cfg.Memory()
-			assert.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -520,78 +482,88 @@ func TestDevEnvConfig_GetDeveloperDir(t *testing.T) {
 // exercise parsing/normalization; it only covers the formatting layer.
 func TestDevEnvConfig_CPURequest_AliasOfCPU(t *testing.T) {
 	tests := []struct {
-		name  string
-		milli int64 // canonical millicores
+		name string
+		raw  any // CPURaw: string/int/float forms supported by your parser
+		want string
 	}{
-		{name: "zero", milli: 0},
-		{name: "positive", milli: 2500},
-		{name: "large", milli: 123456},
+		// Valid forms
+		{name: "core integer string", raw: "4", want: "4000m"},
+		{name: "fractional cores string", raw: "2.5", want: "2500m"},
+		{name: "millicores string", raw: "500m", want: "500m"},
+		{name: "int cores", raw: 3, want: "3000m"},
+		{name: "float cores", raw: 1.25, want: "1250m"},
+
+		// Degenerate / invalid → empty (omit in manifests)
+		{name: "zero", raw: "0", want: "0"},
+		{name: "negative", raw: -1, want: "0"},
+		{name: "invalid string", raw: "abc", want: "0"},
+		{name: "nil", raw: nil, want: "0"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &DevEnvConfig{
 				BaseConfig: BaseConfig{
-					Resources: ResourceConfig{CPU: tc.milli},
+					Resources: ResourceConfig{
+						CPU: tc.raw,
+					},
 				},
 			}
 			gotCPU := cfg.CPU()
+			assert.Equal(t, tc.want, gotCPU, "CPU() should format from CPURaw via getCanonicalCPU()")
+
 			gotReq := cfg.CPURequest()
-			assert.Equal(t, gotCPU, gotReq)
+			assert.Equal(t, gotCPU, gotReq, "CPURequest() must be an exact alias of CPU()")
 		})
 	}
-
-	// Guard: CPURaw alone (without normalization) has no effect on getters.
-	t.Run("raw value ignored without normalization", func(t *testing.T) {
-		cfg := &DevEnvConfig{
-			BaseConfig: BaseConfig{
-				Resources: ResourceConfig{CPURaw: "2.5", CPU: 0},
-			},
-		}
-		assert.Equal(t, "0", cfg.CPU())
-		assert.Equal(t, cfg.CPU(), cfg.CPURequest())
-	})
 }
 
-// TestDevEnvConfig_MemoryRequest_AliasOfMemory documents that MemoryRequest()
-// returns exactly what Memory() returns for canonical mebibytes (Mi). This
-// exercises the formatting layer only; parsing/normalization is tested elsewhere.
+// TestDevEnvConfig_MemoryRequest_AliasOfMemory verifies that MemoryRequest()
+// returns exactly what Memory() returns when Memory() computes from MemoryRaw
+// via getCanonicalMemory(). We only test the wrapper/presentation behavior here;
+// detailed normalization cases live in resources_test.go.
 func TestDevEnvConfig_MemoryRequest_AliasOfMemory(t *testing.T) {
 	tests := []struct {
-		name  string
-		memMi int64 // canonical Mi
+		name string
+		raw  any // MemoryRaw: forms supported by your parser
+		want string
 	}{
-		{name: "zero -> empty", memMi: 0},
-		{name: "exact Gi formats Gi", memMi: 16 * 1024}, // "16Gi"
-		{name: "non-Gi (1.5Gi) -> Mi", memMi: 1536},     // "1536Mi"
-		{name: "non-Gi (small Mi)", memMi: 477},         // "477Mi"
-		// Under strict normalization, canonical should not be negative; this is defensive.
-		{name: "negative -> empty (defensive)", memMi: -1},
+		// --- Valid forms ---
+		{name: "Gi exact", raw: "16Gi", want: "16Gi"},
+		{name: "Mi exact", raw: "512Mi", want: "512Mi"},
+		{name: "fractional Gi -> Mi", raw: "1.5Gi", want: "1536Mi"}, // 1.5 * 1024 = 1536 Mi
+		{name: "trim & case-insensitive", raw: " 2gi ", want: "2Gi"},
+		{name: "bare numeric (Gi policy)", raw: "15", want: "15Gi"},
+
+		// Non-string numerics (if supported by your parser; typically YAML gives float64/int)
+		{name: "int means Gi", raw: 2, want: "2Gi"},
+		{name: "float means Gi", raw: 1.25, want: "1280Mi"}, // 1.25 * 1024 = 1280 Mi
+
+		// --- Degenerate / invalid → empty string (omit in manifests) ---
+		{name: "zero Gi -> empty", raw: "0Gi", want: ""},
+		{name: "zero bare -> empty", raw: "0", want: ""},
+		{name: "negative -> empty", raw: "-1Gi", want: ""},
+		{name: "invalid unit -> empty", raw: "12GB", want: ""},
+		{name: "nonnumeric -> empty", raw: "abc", want: ""},
+		{name: "nil -> empty", raw: nil, want: ""},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &DevEnvConfig{
 				BaseConfig: BaseConfig{
-					Resources: ResourceConfig{Memory: tc.memMi},
+					Resources: ResourceConfig{
+						Memory: tc.raw,
+					},
 				},
 			}
 			gotMem := cfg.Memory()
+			assert.Equal(t, tc.want, gotMem, "Memory() should format from MemoryRaw via getCanonicalMemory()")
+
 			gotReq := cfg.MemoryRequest()
-			assert.Equal(t, gotMem, gotReq)
+			assert.Equal(t, gotMem, gotReq, "MemoryRequest() must be an exact alias of Memory()")
 		})
 	}
-
-	// Guard: MemoryRaw alone (without normalization) has no effect on getters.
-	t.Run("raw value ignored without normalization", func(t *testing.T) {
-		cfg := &DevEnvConfig{
-			BaseConfig: BaseConfig{
-				Resources: ResourceConfig{MemoryRaw: "1.5Gi", Memory: 0},
-			},
-		}
-		assert.Equal(t, "", cfg.Memory())
-		assert.Equal(t, cfg.Memory(), cfg.MemoryRequest())
-	})
 }
 
 // TestDevEnvConfig_Embedding verifies Go struct embedding behavior for this API:
@@ -653,14 +625,10 @@ func TestNewBaseConfigWithDefaults_ExactValues(t *testing.T) {
 	require.Equal(t, "/opt/venv/bin", cfg.PythonBinPath)
 
 	// Resources (canonical)
-	require.Equal(t, int64(2000), cfg.Resources.CPU)    // 2 cores
-	require.Equal(t, int64(8192), cfg.Resources.Memory) // 8Gi
+	require.Equal(t, int(2), cfg.Resources.CPU)           // 2 cores
+	require.Equal(t, string("8Gi"), cfg.Resources.Memory) // 8Gi
 	require.Equal(t, "20Gi", cfg.Resources.Storage)
 	require.Equal(t, 0, cfg.Resources.GPU)
-
-	// Raw fields should be empty when canonical defaults are used
-	require.Nil(t, cfg.Resources.CPURaw)
-	require.Nil(t, cfg.Resources.MemoryRaw)
 
 	// Packages: non-nil, length 0
 	require.NotNil(t, cfg.Packages.Python)

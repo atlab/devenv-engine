@@ -114,7 +114,6 @@ func LoadDeveloperConfigWithBaseConfig(configDir, developerName string, baseConf
 	// Step 6: Set developer directory and validate
 	userConfig.DeveloperDir = developerDir
 
-	// Step 7: Normalize flexible/raw fields → canonical representation
 	if err := userConfig.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration in %s: %w", configPath, err)
 	}

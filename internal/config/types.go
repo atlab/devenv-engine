@@ -155,7 +155,6 @@ func (c *DevEnvConfig) GPU() int {
 }
 
 // CPU returns the canonical CPU quantity formatted for Kubernetes (e.g., "2500m").
-// Assumes Resources.CPU has already been normalized to millicores.
 // Returns "0" if CPU <= 0 so callers can omit the field or treat as no request.
 func (c *DevEnvConfig) CPU() string {
 	CPU_in_millicores, err := c.Resources.getCanonicalCPU()

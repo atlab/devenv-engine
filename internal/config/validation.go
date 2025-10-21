@@ -107,8 +107,6 @@ func validateKubernetesCPU(fl validator.FieldLevel) bool {
 
 	case int:
 		return v >= 0
-	case int64:
-		return v >= 0
 
 	case float64:
 		return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
@@ -149,9 +147,6 @@ func validateKubernetesMemory(fl validator.FieldLevel) bool {
 		return err == nil && f >= 0
 
 	case int:
-		return v >= 0
-
-	case int64:
 		return v >= 0
 
 	case float64:

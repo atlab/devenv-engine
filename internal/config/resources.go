@@ -54,9 +54,6 @@ func normalizeCPUText(v any) (string, error) {
 	case int:
 		return strconv.FormatInt(int64(x), 10), nil
 
-	case int64:
-		return strconv.FormatInt(x, 10), nil
-
 	case float64:
 		if math.IsNaN(x) || math.IsInf(x, 0) {
 			return "", fmt.Errorf("invalid cpu number: %v", x)
@@ -122,9 +119,8 @@ func (r *ResourceConfig) getCanonicalCPU() (int64, error) {
 //
 //	" 16Gi "   -> "16Gi"
 //	"512mi"    -> "512Mi"
-//	"500m"     -> "500m"   // (this is CPU-like; if user supplies it by mistake,
-//	                        // memoryTextToMi will reject it)
-//	"1.5"      -> "1.5"    // bare number (policy: interpret as Gi later)
+//	"500m"     -> "500m"
+//	"1.5"      -> "1.5"
 //	2          -> "2"
 //	1.25       -> "1.25"
 func normalizeMemoryText(v any) (string, error) {
@@ -154,9 +150,6 @@ func normalizeMemoryText(v any) (string, error) {
 
 	case int:
 		return strconv.FormatInt(int64(x), 10), nil
-
-	case int64:
-		return strconv.FormatInt(x, 10), nil
 
 	case float64:
 		if math.IsNaN(x) || math.IsInf(x, 0) {
@@ -204,8 +197,8 @@ func memoryTextToMi(s string) (int64, error) {
 	for suf, factor := range binToMi {
 		if strings.HasSuffix(strings.ToLower(s), strings.ToLower(suf)) {
 			numStr := strings.TrimSpace(s[:len(s)-len(suf)])
-			n, ok := parseNumber(numStr)
-			if !ok || n < 0 {
+			n, err := strconv.ParseFloat(numStr, 64)
+			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
 				return 0, fmt.Errorf("invalid %s quantity: %q", suf, s)
 			}
 			return roundFloatToInt64(n * factor)
@@ -221,8 +214,8 @@ func memoryTextToMi(s string) (int64, error) {
 	for suf, mul := range decBytesToMi {
 		if strings.HasSuffix(strings.ToLower(s), strings.ToLower(suf)) {
 			numStr := strings.TrimSpace(s[:len(s)-len(suf)])
-			n, ok := parseNumber(numStr)
-			if !ok || n < 0 {
+			n, err := strconv.ParseFloat(numStr, 64)
+			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
 				return 0, fmt.Errorf("invalid %s bytes quantity: %q", suf, s)
 			}
 			// Convert decimal bytes → MiB.
@@ -232,10 +225,12 @@ func memoryTextToMi(s string) (int64, error) {
 	}
 
 	// Bare number => Gi by policy
-	if n, ok := parseNumber(s); ok {
+	n, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err == nil && !math.IsNaN(n) && !math.IsInf(n, 0) {
 		if n < 0 {
 			return 0, fmt.Errorf("memory must be >= 0")
 		}
+		// Bare number => Gi by policy, convert to Mi.
 		return roundFloatToInt64(n * 1024.0)
 	}
 	return 0, fmt.Errorf("invalid memory quantity: %q", s)
@@ -273,19 +268,6 @@ func roundFloatToInt64(v float64) (int64, error) {
 		return 0, nil
 	}
 	return rounded, nil
-}
-
-// parseNumber accepts integers/decimals/scientific notation (e.g., "1e6").
-func parseNumber(s string) (float64, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, false
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0, false
-	}
-	return f, true
 }
 
 // Case-insensitive suffix check.

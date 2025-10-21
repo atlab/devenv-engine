@@ -40,7 +40,7 @@ func Test_normalizeCPUText(t *testing.T) {
 
 		// Numeric types
 		{"int", 4, "4", true},
-		{"int64", int64(7), "7", true},
+		{"int64", int(7), "7", true},
 		{"float64", 1.25, "1.25", true},
 		{"float64 NaN -> error", math.NaN(), "", false},
 		{"float64 +Inf -> error", math.Inf(+1), "", false},
@@ -50,7 +50,6 @@ func Test_normalizeCPUText(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := normalizeCPUText(tc.in)
 			if tc.ok {
@@ -89,7 +88,6 @@ func Test_cpuTextToMillicores(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := cpuTextToMillicores(tc.in)
 			if tc.ok {
@@ -120,7 +118,6 @@ func Test_getCanonicalCPU_Integration(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			r := &ResourceConfig{CPU: tc.raw}
 			got, err := r.getCanonicalCPU()
@@ -165,7 +162,6 @@ func Test_normalizeMemoryText(t *testing.T) {
 
 		// Numeric types
 		{"int -> '2'", 2, "2", true},
-		{"int64 -> '7'", int64(7), "7", true},
 		{"float64 -> '1.25'", 1.25, "1.25", true},
 		{"float NaN -> error", math.NaN(), "", false},
 		{"float Inf -> error", math.Inf(+1), "", false},
@@ -175,7 +171,6 @@ func Test_normalizeMemoryText(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := normalizeMemoryText(tc.in)
 			if tc.ok {
@@ -220,7 +215,6 @@ func Test_memoryTextToMi(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := memoryTextToMi(tc.in)
 			if tc.ok {

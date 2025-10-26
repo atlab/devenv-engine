@@ -11,11 +11,11 @@ import (
 // --- CPU normalization pipeline ---------------------------------------------
 // ============================================================================
 
-// normalizeCPUText coerces a flexible value (string/int/float) into a
+// normalizeToCPUText coerces a flexible value (string/int/float) into a
 // canonical textual CPU quantity that k8s accepts, e.g. "2", "2.5", or "500m".
 // It trims whitespace and lowercases the unit. It does NOT add "m" for you;
 // integers/floats remain core-based unless the input already used "m".
-func normalizeCPUText(v any) (string, error) {
+func normalizeToCPUText(v any) (string, error) {
 	switch x := v.(type) {
 	case nil:
 		return "", nil // absent; caller decides how to treat
@@ -100,7 +100,7 @@ func cpuTextToMillicores(s string) (int64, error) {
 // getCanonicalCPU parses ResourceConfig.CPU on demand and returns millicores.
 // This is the single entry-point your higher-level code should call.
 func (r *ResourceConfig) getCanonicalCPU() (int64, error) {
-	text, err := normalizeCPUText(r.CPU)
+	text, err := normalizeToCPUText(r.CPU)
 	if err != nil {
 		return 0, err
 	}
@@ -123,7 +123,7 @@ func (r *ResourceConfig) getCanonicalCPU() (int64, error) {
 //	"1.5"      -> "1.5"
 //	2          -> "2"
 //	1.25       -> "1.25"
-func normalizeMemoryText(v any) (string, error) {
+func normalizeToMemoryText(v any) (string, error) {
 	switch x := v.(type) {
 	case nil:
 		return "", nil
@@ -238,7 +238,7 @@ func memoryTextToMi(s string) (int64, error) {
 
 // getCanonicalMemory parses ResourceConfig.Memory on demand and returns MiB.
 func (r *ResourceConfig) getCanonicalMemory() (int64, error) {
-	text, err := normalizeMemoryText(r.Memory)
+	text, err := normalizeToMemoryText(r.Memory)
 	if err != nil {
 		return 0, err
 	}

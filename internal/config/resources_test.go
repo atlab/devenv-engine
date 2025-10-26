@@ -12,7 +12,7 @@ import (
 // -------------------- CPU --------------------
 //
 
-func Test_normalizeCPUText(t *testing.T) {
+func Test_normalizeToCPUText(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -51,7 +51,7 @@ func Test_normalizeCPUText(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := normalizeCPUText(tc.in)
+			got, err := normalizeToCPUText(tc.in)
 			if tc.ok {
 				require.NoError(t, err)
 				assert.Equal(t, tc.want, got)
@@ -135,7 +135,7 @@ func Test_getCanonicalCPU_Integration(t *testing.T) {
 // -------------------- Memory --------------------
 //
 
-func Test_normalizeMemoryText(t *testing.T) {
+func Test_normalizeToMemoryText(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -172,7 +172,7 @@ func Test_normalizeMemoryText(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := normalizeMemoryText(tc.in)
+			got, err := normalizeToMemoryText(tc.in)
 			if tc.ok {
 				require.NoError(t, err)
 				assert.Equal(t, tc.want, got)

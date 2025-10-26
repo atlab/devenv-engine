@@ -252,7 +252,7 @@ func (r *ResourceConfig) getCanonicalMemory() (int64, error) {
 // math.MaxInt64, it returns an overflow error.
 func bytesToMi(bytes float64) (int64, error) {
 	if bytes < 0 || math.IsNaN(bytes) || math.IsInf(bytes, 0) {
-		return 0, fmt.Errorf("memory must be >= 0")
+		return 0, fmt.Errorf("memory must be a valid, finite number >= 0.0 (not NaN or +/-Inf); got %g", bytes)
 	}
 	miFloat := bytes / (1024.0 * 1024.0)
 	if miFloat > float64(math.MaxInt64) {

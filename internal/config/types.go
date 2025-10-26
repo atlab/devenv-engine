@@ -154,8 +154,13 @@ func (c *DevEnvConfig) GPU() int {
 	return c.Resources.GPU
 }
 
-// CPU returns the canonical CPU quantity formatted for Kubernetes (e.g., "2500m").
-// Returns "0" if CPU <= 0 so callers can omit the field or treat as no request.
+// CPU returns the canonical Kubernetes CPU quantity for this config as a
+// millicore-formatted string (e.g., "2500m"). The value is computed on demand
+// by parsing/normalizing the raw CPU input (e.g., "2", "2.5", "500m", 3)
+// via getCanonicalCPU(), which yields a count of millicores. If normalization
+// fails or the resulting value is non-positive, CPU returns "0" so callers
+// can omit the field or treat it as no explicit CPU request in generated
+// manifests.
 func (c *DevEnvConfig) CPU() string {
 	CPU_in_millicores, err := c.Resources.getCanonicalCPU()
 	if err != nil || CPU_in_millicores <= 0 {
@@ -164,7 +169,13 @@ func (c *DevEnvConfig) CPU() string {
 	return fmt.Sprintf("%dm", CPU_in_millicores)
 }
 
-// Memory returns "Gi" or "Mi" ("" means omit).
+// Memory returns the canonical Kubernetes memory quantity for this config,
+// choosing "Gi" when the normalized value is an exact Gi multiple and "Mi"
+// otherwise. The value is computed on demand by parsing/normalizing the raw
+// memory input (e.g., "16Gi", "512Mi", "500M", 1.5) via getCanonicalMemory(),
+// which yields a count of mebibytes (Mi). If normalization fails or the
+// resulting value is non-positive, Memory returns the empty string so callers
+// can omit the field in generated manifests.
 func (c *DevEnvConfig) Memory() string {
 	memory_in_Mi, err := c.Resources.getCanonicalMemory()
 	if err != nil || memory_in_Mi <= 0 {

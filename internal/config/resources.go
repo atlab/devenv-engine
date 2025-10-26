@@ -246,7 +246,10 @@ func (r *ResourceConfig) getCanonicalMemory() (int64, error) {
 }
 
 // ---------------- helpers ----------------
-
+// bytesToMi converts a size in decimal bytes to mebibytes (MiB) and rounds to
+// the nearest int64 MiB. It rejects negative, NaN, or infinite inputs and
+// returns an error in those cases. If the converted MiB value would exceed
+// math.MaxInt64, it returns an overflow error.
 func bytesToMi(bytes float64) (int64, error) {
 	if bytes < 0 || math.IsNaN(bytes) || math.IsInf(bytes, 0) {
 		return 0, fmt.Errorf("memory must be >= 0")
@@ -258,6 +261,9 @@ func bytesToMi(bytes float64) (int64, error) {
 	return roundFloatToInt64(miFloat)
 }
 
+// roundFloatToInt64 rounds v to the nearest int64 using standard rounding.
+// NaN or infinite values return an error. Extremely small non-zero magnitudes
+// that round to 0 (|v| < 0.5) are treated as 0 without error.
 func roundFloatToInt64(v float64) (int64, error) {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return 0, fmt.Errorf("invalid number")

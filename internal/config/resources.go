@@ -276,7 +276,9 @@ func roundFloatToInt64(v float64) (int64, error) {
 	return rounded, nil
 }
 
-// Case-insensitive suffix check.
+// hasSuffixFold reports whether s ends with suf, case-insensitively.
+// It uses strings.EqualFold, so comparisons are Unicode case-folded
+// (locale-independent) but not Unicode-normalized.
 func hasSuffixFold(s, suf string) bool {
 	return len(s) >= len(suf) && strings.EqualFold(s[len(s)-len(suf):], suf)
 }

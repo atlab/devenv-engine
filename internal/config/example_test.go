@@ -26,7 +26,6 @@ func ExampleLoadDeveloperConfig() {
 	sshKeys, err := cfg.GetSSHKeys()
 	if err != nil {
 		log.Fatal(err)
-		return
 	}
 	fmt.Printf("SSH Keys: %d configured\n", len(sshKeys))
 
